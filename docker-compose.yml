@@ -1,0 +1,18 @@
+services:
+  npm-dashboard:
+    build: .
+    container_name: npm-dashboard
+    restart: unless-stopped
+    ports:
+      - "5080:5080"
+    env_file:
+      - .env
+    volumes:
+      # persists uptime history and lets you edit descriptions.json without rebuilding
+      - ./state.json:/app/state.json
+      - ./descriptions.json:/app/descriptions.json
+    # If your NPM instance and backend services are only reachable via the
+    # docker host's LAN (typical for a homelab on a single box), uncomment
+    # the line below instead of using the default bridge network so the
+    # health checker can reach 192.168.x.x hosts directly.
+    # network_mode: host
