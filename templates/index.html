@@ -119,7 +119,9 @@
   .pill.domain { color: var(--blue-text); font-weight: 500; display: inline-block; }
   a.pill.domain:hover { text-decoration: none; background: var(--blue); }
   .pill.type { background: var(--blue); border-color: var(--blue-border); color: var(--blue-text); font-weight: 500; display: flex; align-items: center; gap: 6px; }
-  .pill.backend { background: #f7f8f9; color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; display: flex; align-items: center; gap: 6px; }
+  .pill.backend { background: #f7f8f9; color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  .pill.backend:hover { border-color: var(--blue-border); }
+  .pill.backend.active { border-color: var(--blue-text); background: var(--blue); box-shadow: 0 0 0 2px rgba(26,86,219,0.15); }
   .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
   .dot.up { background: #16a34a; }
   .dot.down { background: #dc2626; }
@@ -194,6 +196,30 @@
     font-size: 13px;
     margin-bottom: 16px;
   }
+  .filter-banner {
+    background: var(--blue);
+    color: var(--blue-text);
+    border: 1px solid var(--blue-border);
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-size: 13px;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .filter-banner button {
+    border: 1px solid var(--blue-border);
+    background: #fff;
+    color: var(--blue-text);
+    border-radius: 6px;
+    padding: 3px 10px;
+    font-size: 12.5px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .filter-banner button:hover { background: var(--blue); }
   a { color: var(--blue-text); text-decoration: none; }
   a:hover { text-decoration: underline; }
   .type-badge {
@@ -259,6 +285,7 @@
 
       <div class="card">
         <h2>Route details</h2>
+        <div id="table-filter-banner"></div>
         <div class="table-wrap">
           <table>
             <thead>
@@ -316,6 +343,65 @@ function formatVersion(v) {
   if (!v) return "-";
   if (typeof v === "object") return [v.major, v.minor, v.revision].filter(x => x != null).join(".");
   return v;
+}
+
+function backendLabel(r) {
+  if (!r.host) return "—";
+  return r.port ? `${r.host}:${r.port}` : r.host;
+}
+
+let lastRoutes = [];
+let backendFilter = null;
+
+function renderTable() {
+  const routes = backendFilter ? lastRoutes.filter(r => backendLabel(r) === backendFilter) : lastRoutes;
+
+  const tbody = document.getElementById("routes-table");
+  tbody.innerHTML = "";
+  routes.forEach(r => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${r.domain}</td>
+      <td><span class="type-badge">${r.type}</span></td>
+      <td class="mono">${r.service_url}</td>
+      <td class="${r.ssl ? 'ssl-yes' : 'ssl-no'}">${r.ssl ? 'Yes' : 'No'}</td>
+      <td>${healthDot(r.health.status)}</td>
+      <td>${r.health.uptime_human}${r.health.uptime_pct != null ? ' ('+r.health.uptime_pct+'%)' : ''}</td>
+      <td>${r.description || '-'}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  const filterBanner = document.getElementById("table-filter-banner");
+  if (backendFilter) {
+    filterBanner.innerHTML = `
+      <div class="filter-banner">
+        <span>Showing ${routes.length} route${routes.length === 1 ? '' : 's'} pointing to <span class="mono">${backendFilter}</span></span>
+        <button id="clear-backend-filter">Clear filter</button>
+      </div>
+    `;
+    document.getElementById("clear-backend-filter").addEventListener("click", () => setBackendFilter(null));
+  } else {
+    filterBanner.innerHTML = "";
+  }
+}
+
+function setBackendFilter(label) {
+  backendFilter = (backendFilter === label) ? null : label;
+  document.querySelectorAll(".pill.backend").forEach(p => {
+    p.classList.toggle("active", p.dataset.backendLabel === backendFilter);
+  });
+  renderTable();
+  if (backendFilter) {
+    document.getElementById("routes-table").closest(".card").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+}
+
+function setupTableFilter() {
+  document.getElementById("route-rows-right").addEventListener("click", (e) => {
+    const pill = e.target.closest(".pill.backend");
+    if (pill) setBackendFilter(pill.dataset.backendLabel);
+  });
 }
 
 function pathBetween(svg, ax, ay, bx, by) {
@@ -394,10 +480,7 @@ async function refresh() {
       banner.innerHTML = "";
     }
 
-    function backendLabel(r) {
-      if (!r.host) return "—";
-      return r.port ? `${r.host}:${r.port}` : r.host;
-    }
+    lastRoutes = routes;
 
     const leftEl = document.getElementById("route-rows-left");
     const rightEl = document.getElementById("route-rows-right");
@@ -441,29 +524,17 @@ async function refresh() {
       const rightRow = document.createElement("div");
       rightRow.className = "route-row";
       const countBadge = entry.count > 1 ? ` <span class="mono" style="opacity:.6">×${entry.count}</span>` : "";
+      const isActive = entry.label === backendFilter;
+      const tip = `Click to show the ${entry.count} route${entry.count === 1 ? '' : 's'} pointing here in the table below`;
       rightRow.innerHTML = `
-        <span class="pill backend" title="${entry.service_url || ''}${entry.response_ms != null ? ' · ' + entry.response_ms + 'ms' : ''}">
+        <span class="pill backend${isActive ? ' active' : ''}" data-backend-label="${entry.label}" title="${tip}">
           <span class="dot ${entry.status}"></span> 🖥️ ${entry.label}${countBadge}
         </span>
       `;
       rightEl.appendChild(rightRow);
     });
 
-    const tbody = document.getElementById("routes-table");
-    tbody.innerHTML = "";
-    routes.forEach(r => {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td>${r.domain}</td>
-        <td><span class="type-badge">${r.type}</span></td>
-        <td class="mono">${r.service_url}</td>
-        <td class="${r.ssl ? 'ssl-yes' : 'ssl-no'}">${r.ssl ? 'Yes' : 'No'}</td>
-        <td>${healthDot(r.health.status)}</td>
-        <td>${r.health.uptime_human}${r.health.uptime_pct != null ? ' ('+r.health.uptime_pct+'%)' : ''}</td>
-        <td>${r.description || '-'}</td>
-      `;
-      tbody.appendChild(tr);
-    });
+    renderTable();
 
     requestAnimationFrame(() => {
       drawLinks(routes.length);
@@ -616,6 +687,7 @@ function setupPan() {
 
 setupPan();
 setupZoomControls();
+setupTableFilter();
 refresh();
 setInterval(refresh, 15000);
 window.addEventListener("resize", () => drawLinks(document.querySelectorAll(".route-row").length));
