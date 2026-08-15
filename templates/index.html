@@ -138,6 +138,37 @@
     white-space: nowrap;
   }
 
+  .diagram-card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .diagram-card-header h2 { margin: 0; }
+  .diagram-toolbar { display: flex; align-items: center; gap: 6px; }
+  .diagram-toolbar button {
+    border: 1px solid var(--border);
+    background: #fff;
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 12.5px;
+    line-height: 1.4;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .diagram-toolbar button:hover { background: #f3f4f6; }
+  .diagram-toolbar .zoom-level { font-size: 12.5px; color: var(--muted); min-width: 40px; text-align: center; }
+  .diagram-viewport:fullscreen { height: 100vh; background: var(--card); border-radius: 0; }
+  .diagram-viewport:fullscreen .diagram { padding: 40px; }
+  .diagram-card.maximized {
+    position: fixed;
+    inset: 24px;
+    z-index: 999;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.25);
+  }
+  .diagram-card.maximized .diagram-viewport {
+    flex: 1 1 auto;
+    height: auto;
+  }
+
+  .table-wrap { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   thead th {
     text-align: left;
@@ -203,8 +234,17 @@
 
   <div class="grid">
     <div class="col-left">
-      <div class="card diagram-card">
-        <h2>Routes</h2>
+      <div class="card diagram-card" id="diagram-card">
+        <div class="diagram-card-header">
+          <h2>Routes</h2>
+          <div class="diagram-toolbar">
+            <button id="zoom-out" title="Zoom out">−</button>
+            <span class="zoom-level" id="zoom-level">100%</span>
+            <button id="zoom-in" title="Zoom in">+</button>
+            <button id="zoom-fit" title="Fit everything in view">Fit</button>
+            <button id="zoom-fullscreen" title="Full screen">⛶</button>
+          </div>
+        </div>
         <div class="diagram-viewport" id="diagram-viewport">
           <div class="diagram" id="diagram">
             <svg class="links" id="links"></svg>
@@ -219,12 +259,14 @@
 
       <div class="card">
         <h2>Route details</h2>
-        <table>
-          <thead>
-            <tr><th>Destination</th><th>Type</th><th>Service</th><th>SSL</th><th>Status</th><th>Uptime</th><th>Description</th></tr>
-          </thead>
-          <tbody id="routes-table"></tbody>
-        </table>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Destination</th><th>Type</th><th>Service</th><th>SSL</th><th>Status</th><th>Uptime</th><th>Description</th></tr>
+            </thead>
+            <tbody id="routes-table"></tbody>
+          </table>
+        </div>
       </div>
     </div>
 
@@ -270,6 +312,12 @@ function healthDot(status) {
   return '<span class="dot unknown"></span> Checking';
 }
 
+function formatVersion(v) {
+  if (!v) return "-";
+  if (typeof v === "object") return [v.major, v.minor, v.revision].filter(x => x != null).join(".");
+  return v;
+}
+
 function pathBetween(svg, ax, ay, bx, by) {
   const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
   const midX = (ax + bx) / 2;
@@ -288,18 +336,24 @@ function drawLinks(rowCount) {
   svg.innerHTML = "";
   if (!rowCount) return;
 
+  // #diagram is scaled via CSS transform for zoom. getBoundingClientRect()
+  // reports the post-transform (on-screen) position, but the <svg> draws in
+  // pre-transform local coordinates that then get scaled again by the same
+  // transform — so raw screen deltas must be divided by the zoom factor to
+  // land in the right spot instead of drifting further off at each zoom step.
+  const z = zoomLevel || 1;
   const diagramRect = diagram.getBoundingClientRect();
   const hubRect = hub.getBoundingClientRect();
-  const hubLeftX = hubRect.left - diagramRect.left;
-  const hubRightX = hubRect.right - diagramRect.left;
-  const hubY = hubRect.top - diagramRect.top + hubRect.height / 2;
+  const hubLeftX = (hubRect.left - diagramRect.left) / z;
+  const hubRightX = (hubRect.right - diagramRect.left) / z;
+  const hubY = (hubRect.top - diagramRect.top + hubRect.height / 2) / z;
 
   const leftRows = document.querySelectorAll("#route-rows-left .route-row");
   leftRows.forEach(row => {
     const pill = row.querySelector(".pill.type");
     const r = pill.getBoundingClientRect();
-    const x0 = r.right - diagramRect.left;
-    const y0 = r.top - diagramRect.top + r.height / 2;
+    const x0 = (r.right - diagramRect.left) / z;
+    const y0 = (r.top - diagramRect.top + r.height / 2) / z;
     pathBetween(svg, x0, y0, hubLeftX, hubY);
   });
 
@@ -307,8 +361,8 @@ function drawLinks(rowCount) {
   rightRows.forEach(row => {
     const pill = row.querySelector(".pill.backend");
     const r = pill.getBoundingClientRect();
-    const x0 = r.left - diagramRect.left;
-    const y0 = r.top - diagramRect.top + r.height / 2;
+    const x0 = (r.left - diagramRect.left) / z;
+    const y0 = (r.top - diagramRect.top + r.height / 2) / z;
     pathBetween(svg, hubRightX, hubY, x0, y0);
   });
 }
@@ -326,7 +380,7 @@ async function refresh() {
     document.getElementById("m-status").innerHTML = `<span class="badge ${statusBadgeClass(summary.status)}">${summary.status}</span>`;
     document.getElementById("m-uptime").textContent = summary.dashboard_uptime;
     document.getElementById("d-url").textContent = summary.npm_base_url;
-    document.getElementById("d-version").textContent = summary.npm_version || "-";
+    document.getElementById("d-version").textContent = formatVersion(summary.npm_version);
     document.getElementById("d-mode").textContent = summary.demo_mode ? "Demo data" : "Live";
     document.getElementById("d-interval").textContent = summary.health_check_interval_seconds + "s";
     document.getElementById("hub-name").textContent = summary.dashboard_name;
@@ -411,10 +465,115 @@ async function refresh() {
       tbody.appendChild(tr);
     });
 
-    requestAnimationFrame(() => drawLinks(routes.length));
+    requestAnimationFrame(() => {
+      drawLinks(routes.length);
+      // Emoji glyphs can finish loading a beat after first paint and nudge
+      // pill widths; redraw once more shortly after to stay pixel-aligned.
+      setTimeout(() => drawLinks(routes.length), 250);
+    });
+
+    if (!didInitialFit && routes.length) {
+      didInitialFit = true;
+      requestAnimationFrame(fitToView);
+    }
   } catch (e) {
     console.error(e);
   }
+}
+
+let zoomLevel = 1;
+let didInitialFit = false;
+const ZOOM_MIN = 0.2;
+const ZOOM_MAX = 2;
+const ZOOM_STEP = 0.15;
+
+function applyZoom() {
+  const diagram = document.getElementById("diagram");
+  diagram.style.transformOrigin = "top left";
+  diagram.style.transform = `scale(${zoomLevel})`;
+  document.getElementById("zoom-level").textContent = Math.round(zoomLevel * 100) + "%";
+  drawLinks(document.querySelectorAll(".route-row").length);
+}
+
+function setZoom(z) {
+  zoomLevel = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, +z.toFixed(2)));
+  applyZoom();
+}
+
+function fitToView() {
+  const viewport = document.getElementById("diagram-viewport");
+  const diagram = document.getElementById("diagram");
+  // offsetWidth/Height reflect pre-transform layout size, unaffected by the
+  // current zoom, so this is a stable basis to compute the next scale from.
+  const priorTransform = diagram.style.transform;
+  diagram.style.transform = "none";
+  const naturalWidth = diagram.offsetWidth;
+  const naturalHeight = diagram.offsetHeight;
+  diagram.style.transform = priorTransform;
+
+  if (!naturalWidth || !naturalHeight) return;
+  const scaleX = (viewport.clientWidth - 8) / naturalWidth;
+  const scaleY = (viewport.clientHeight - 8) / naturalHeight;
+  setZoom(Math.min(scaleX, scaleY, 1));
+  viewport.scrollLeft = 0;
+  viewport.scrollTop = 0;
+}
+
+function setupZoomControls() {
+  document.getElementById("zoom-in").addEventListener("click", () => setZoom(zoomLevel + ZOOM_STEP));
+  document.getElementById("zoom-out").addEventListener("click", () => setZoom(zoomLevel - ZOOM_STEP));
+  document.getElementById("zoom-fit").addEventListener("click", fitToView);
+
+  const viewport = document.getElementById("diagram-viewport");
+  const card = document.getElementById("diagram-card");
+  const fsBtn = document.getElementById("zoom-fullscreen");
+
+  function setMaximizedFallback(on) {
+    card.classList.toggle("maximized", on);
+    fsBtn.textContent = on ? "⤢" : "⛶";
+    requestAnimationFrame(fitToView);
+  }
+
+  fsBtn.addEventListener("click", () => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+      return;
+    }
+    if (card.classList.contains("maximized")) {
+      setMaximizedFallback(false);
+      return;
+    }
+    // Some embedded/sandboxed browser contexts block the real Fullscreen
+    // API outright, and don't always signal it cleanly — some throw
+    // synchronously, some reject the promise, and some just leave it
+    // pending forever. Race a timeout against it so the button always
+    // does something within a bounded time either way.
+    let requestPromise;
+    try {
+      requestPromise = viewport.requestFullscreen ? viewport.requestFullscreen() : Promise.reject(new Error("unsupported"));
+    } catch (e) {
+      requestPromise = Promise.reject(e);
+    }
+    const outcome = Promise.resolve(requestPromise).then(() => "ok", () => "fail");
+    const timeout = new Promise(resolve => setTimeout(() => resolve("timeout"), 400));
+    Promise.race([outcome, timeout]).then(result => {
+      if (result !== "ok") setMaximizedFallback(true);
+    });
+  });
+
+  document.addEventListener("fullscreenchange", () => {
+    if (document.fullscreenElement) {
+      card.classList.remove("maximized");
+    }
+    fsBtn.textContent = document.fullscreenElement ? "⤢" : "⛶";
+    requestAnimationFrame(fitToView);
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && card.classList.contains("maximized")) {
+      setMaximizedFallback(false);
+    }
+  });
 }
 
 function setupPan() {
@@ -456,6 +615,7 @@ function setupPan() {
 }
 
 setupPan();
+setupZoomControls();
 refresh();
 setInterval(refresh, 15000);
 window.addEventListener("resize", () => drawLinks(document.querySelectorAll(".route-row").length));
