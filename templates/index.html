@@ -40,10 +40,10 @@
 
   .grid {
     display: grid;
-    grid-template-columns: 1fr 320px;
+    grid-template-columns: minmax(0, 1fr) 320px;
     gap: 16px;
   }
-  .col-left { display: flex; flex-direction: column; gap: 16px; }
+  .col-left { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
   .col-right { display: flex; flex-direction: column; gap: 16px; }
 
   .card {
@@ -79,11 +79,35 @@
   .badge.down { background: var(--red-bg); color: var(--red-text); }
   .badge.unknown { background: #eee; color: #666; }
 
-  .diagram-card { position: relative; min-height: 460px; }
-  .diagram { position: relative; }
+  .diagram-card { position: relative; min-width: 0; }
+  .diagram-viewport {
+    position: relative;
+    width: 100%;
+    min-width: 0;
+    height: 420px;
+    overflow: auto;
+    cursor: grab;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #fbfbfc;
+  }
+  .diagram-viewport.panning { cursor: grabbing; }
+  .diagram-viewport.panning, .diagram-viewport.panning * { user-select: none; }
+  .diagram {
+    position: relative;
+    display: flex;
+    align-items: stretch;
+    gap: 28px;
+    min-width: 920px;
+    min-height: 100%;
+    padding: 20px 24px;
+  }
   svg.links { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
-  .route-rows { display: flex; flex-direction: column; gap: 10px; position: relative; z-index: 1; }
+  .diagram-col { flex: 0 0 320px; display: flex; flex-direction: column; justify-content: center; gap: 10px; position: relative; z-index: 1; }
+  .diagram-col.right { align-items: flex-end; }
+  .hub-col { flex: 0 0 180px; display: flex; align-items: center; justify-content: center; position: relative; z-index: 1; }
   .route-row { display: flex; align-items: center; gap: 8px; }
+  .diagram-col.right .route-row { flex-direction: row-reverse; }
   .pill {
     border: 1px solid var(--border);
     background: #fff;
@@ -92,14 +116,15 @@
     font-size: 13px;
     white-space: nowrap;
   }
-  .pill.domain { color: var(--blue-text); font-weight: 500; }
+  .pill.domain { color: var(--blue-text); font-weight: 500; display: inline-block; }
+  a.pill.domain:hover { text-decoration: none; background: var(--blue); }
   .pill.type { background: var(--blue); border-color: var(--blue-border); color: var(--blue-text); font-weight: 500; display: flex; align-items: center; gap: 6px; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .pill.backend { background: #f7f8f9; color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; display: flex; align-items: center; gap: 6px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
   .dot.up { background: #16a34a; }
   .dot.down { background: #dc2626; }
   .dot.unknown { background: #9ca3af; }
 
-  .hub-wrap { position: absolute; right: 18px; top: 50%; transform: translateY(-50%); z-index: 1; }
   .hub {
     border: 1px solid var(--border);
     background: #fff;
@@ -110,6 +135,7 @@
     align-items: center;
     gap: 8px;
     box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    white-space: nowrap;
   }
 
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -179,11 +205,14 @@
     <div class="col-left">
       <div class="card diagram-card">
         <h2>Routes</h2>
-        <div class="diagram" id="diagram">
-          <svg class="links" id="links"></svg>
-          <div class="route-rows" id="route-rows"></div>
-          <div class="hub-wrap">
-            <div class="hub">🏠 <span id="hub-name">{{ dashboard_name }}</span></div>
+        <div class="diagram-viewport" id="diagram-viewport">
+          <div class="diagram" id="diagram">
+            <svg class="links" id="links"></svg>
+            <div class="diagram-col left" id="route-rows-left"></div>
+            <div class="hub-col">
+              <div class="hub">🏠 <span id="hub-name">{{ dashboard_name }}</span></div>
+            </div>
+            <div class="diagram-col right" id="route-rows-right"></div>
           </div>
         </div>
       </div>
@@ -241,32 +270,46 @@ function healthDot(status) {
   return '<span class="dot unknown"></span> Checking';
 }
 
+function pathBetween(svg, ax, ay, bx, by) {
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  const midX = (ax + bx) / 2;
+  const d = `M ${ax} ${ay} C ${midX} ${ay}, ${midX} ${by}, ${bx} ${by}`;
+  path.setAttribute("d", d);
+  path.setAttribute("stroke", "#d7dade");
+  path.setAttribute("stroke-width", "1.5");
+  path.setAttribute("fill", "none");
+  svg.appendChild(path);
+}
+
 function drawLinks(rowCount) {
   const svg = document.getElementById("links");
   const diagram = document.getElementById("diagram");
-  const hub = document.querySelector(".hub-wrap");
+  const hub = document.querySelector(".hub");
   svg.innerHTML = "";
   if (!rowCount) return;
 
   const diagramRect = diagram.getBoundingClientRect();
   const hubRect = hub.getBoundingClientRect();
-  const hubX = hubRect.left - diagramRect.left;
+  const hubLeftX = hubRect.left - diagramRect.left;
+  const hubRightX = hubRect.right - diagramRect.left;
   const hubY = hubRect.top - diagramRect.top + hubRect.height / 2;
 
-  const rows = document.querySelectorAll(".route-row");
-  rows.forEach(row => {
+  const leftRows = document.querySelectorAll("#route-rows-left .route-row");
+  leftRows.forEach(row => {
     const pill = row.querySelector(".pill.type");
     const r = pill.getBoundingClientRect();
     const x0 = r.right - diagramRect.left;
     const y0 = r.top - diagramRect.top + r.height / 2;
-    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    const midX = (x0 + hubX) / 2;
-    const d = `M ${x0} ${y0} C ${midX} ${y0}, ${midX} ${hubY}, ${hubX} ${hubY}`;
-    path.setAttribute("d", d);
-    path.setAttribute("stroke", "#d7dade");
-    path.setAttribute("stroke-width", "1.5");
-    path.setAttribute("fill", "none");
-    svg.appendChild(path);
+    pathBetween(svg, x0, y0, hubLeftX, hubY);
+  });
+
+  const rightRows = document.querySelectorAll("#route-rows-right .route-row");
+  rightRows.forEach(row => {
+    const pill = row.querySelector(".pill.backend");
+    const r = pill.getBoundingClientRect();
+    const x0 = r.left - diagramRect.left;
+    const y0 = r.top - diagramRect.top + r.height / 2;
+    pathBetween(svg, hubRightX, hubY, x0, y0);
   });
 }
 
@@ -297,16 +340,59 @@ async function refresh() {
       banner.innerHTML = "";
     }
 
-    const rowsEl = document.getElementById("route-rows");
-    rowsEl.innerHTML = "";
+    function backendLabel(r) {
+      if (!r.host) return "—";
+      return r.port ? `${r.host}:${r.port}` : r.host;
+    }
+
+    const leftEl = document.getElementById("route-rows-left");
+    const rightEl = document.getElementById("route-rows-right");
+    leftEl.innerHTML = "";
+    rightEl.innerHTML = "";
+
     routes.forEach(r => {
-      const row = document.createElement("div");
-      row.className = "route-row";
-      row.innerHTML = `
-        <span class="pill domain">${r.domain}</span>
+      const linkable = r.type !== "Stream";
+      const url = (r.ssl ? "https://" : "http://") + r.domain;
+      const domainHtml = linkable
+        ? `<a class="pill domain" href="${url}" target="_blank" rel="noopener noreferrer" title="Open ${url}">${r.domain}</a>`
+        : `<span class="pill domain">${r.domain}</span>`;
+
+      const leftRow = document.createElement("div");
+      leftRow.className = "route-row";
+      leftRow.innerHTML = `
+        <span class="dot ${r.health.status}" title="${r.health.status}${r.health.uptime_pct != null ? ' · ' + r.health.uptime_pct + '% uptime' : ''}"></span>
+        ${domainHtml}
         <span class="pill type">🌐 ${r.type}</span>
       `;
-      rowsEl.appendChild(row);
+      leftEl.appendChild(leftRow);
+    });
+
+    // Group routes by their actual backend target so 10 domains pointing at
+    // the same host:port render as a single node on the diagram, not 10.
+    const backends = new Map();
+    routes.forEach(r => {
+      const label = backendLabel(r);
+      if (!backends.has(label)) {
+        backends.set(label, { label, count: 0, status: "unknown", response_ms: null, service_url: r.service_url });
+      }
+      const entry = backends.get(label);
+      entry.count += 1;
+      if (entry.status === "unknown" && r.health.status !== "unknown") {
+        entry.status = r.health.status;
+        entry.response_ms = r.health.response_ms;
+      }
+    });
+
+    backends.forEach(entry => {
+      const rightRow = document.createElement("div");
+      rightRow.className = "route-row";
+      const countBadge = entry.count > 1 ? ` <span class="mono" style="opacity:.6">×${entry.count}</span>` : "";
+      rightRow.innerHTML = `
+        <span class="pill backend" title="${entry.service_url || ''}${entry.response_ms != null ? ' · ' + entry.response_ms + 'ms' : ''}">
+          <span class="dot ${entry.status}"></span> 🖥️ ${entry.label}${countBadge}
+        </span>
+      `;
+      rightEl.appendChild(rightRow);
     });
 
     const tbody = document.getElementById("routes-table");
@@ -331,6 +417,45 @@ async function refresh() {
   }
 }
 
+function setupPan() {
+  const viewport = document.getElementById("diagram-viewport");
+  let panning = false;
+  let dragged = false;
+  let startX, startY, startScrollLeft, startScrollTop;
+
+  viewport.addEventListener("mousedown", (e) => {
+    panning = true;
+    dragged = false;
+    startX = e.pageX;
+    startY = e.pageY;
+    startScrollLeft = viewport.scrollLeft;
+    startScrollTop = viewport.scrollTop;
+    viewport.classList.add("panning");
+  });
+
+  window.addEventListener("mousemove", (e) => {
+    if (!panning) return;
+    const dx = e.pageX - startX;
+    const dy = e.pageY - startY;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) dragged = true;
+    viewport.scrollLeft = startScrollLeft - dx;
+    viewport.scrollTop = startScrollTop - dy;
+  });
+
+  window.addEventListener("mouseup", () => {
+    panning = false;
+    viewport.classList.remove("panning");
+  });
+
+  viewport.addEventListener("click", (e) => {
+    if (dragged) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }, true);
+}
+
+setupPan();
 refresh();
 setInterval(refresh, 15000);
 window.addEventListener("resize", () => drawLinks(document.querySelectorAll(".route-row").length));
