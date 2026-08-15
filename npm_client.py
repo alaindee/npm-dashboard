@@ -82,4 +82,4 @@ class NPMClient:
         return self._get("/api/nginx/redirection-hosts?expand=owner,certificate")
 
     def get_streams(self):
-        return self._get("/api/nginx/streams?expand=owner,certificate")
+        return self._get("/api/nginx/streams?expand=owner")
